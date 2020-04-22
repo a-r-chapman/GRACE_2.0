@@ -1,0 +1,186 @@
+### GRACE 2.0 Algorithm  
+### Author: A Chapman
+
+library(survminer)
+library(tidyverse)
+library(ggplot2)
+library(survival)
+library(scales)
+library(haven)
+library(reshape)
+library(Hmisc)
+library(pROC)
+
+## Require: data frame with row per patient including the following variables
+
+# age (numeric) 
+# sex (factor 1=yes)
+# pulse (numeric bpm)
+# sbp (numeric mmHg)
+# creatinine level (numeric μmol/L) 
+# killip class (factor with four levels)
+# cardiac arrest (factor 1=yes)
+# ecg ischaemia (factor 1=yes)
+# trop.grace (troponin >99th centile, factor, 1=yes)
+# in hospital death (factor 1=yes)
+# 1 year death (factor 1=yes)
+# 1 year MI (factor 1=yes)
+
+
+
+## GRACE 2.0 algorithm for prediction of Death or Death/MI at 1 year ##
+
+# # Test data = death alone = answer is 0.28
+
+# df.grace$age <- 90
+# df.grace$hr <- 92
+# df.grace$sbp <- 139
+# df.grace$creatinine <- 1.06
+# df.grace$killip <- 1
+# df.grace$cardiac.arrest <- 0
+# df.grace$trop.pos <- 1
+# df.grace$ecg.ischaemia <- 1
+
+df.grace$age_10 <- df.grace$age/10
+
+df.grace$sbp_20 <- -df.grace$sbp/20
+  
+df.grace$pulse_30 <- df.grace$hr/30
+
+a1 <- 4.8165
+b1 <- 6.6571
+c1 <- 8.3095
+
+df.grace$f11 <- ifelse(df.grace$age_10>=a1,((df.grace$age_10-a1)^3),0)
+df.grace$f12 <- ifelse(df.grace$age_10>=b1,((df.grace$age_10-b1)^3)*(c1-a1)/(c1-b1),0)
+df.grace$f13 <- ifelse(df.grace$age_10>=c1,((df.grace$age_10-c1)^3)*(b1-a1)/(c1-b1),0)
+df.grace$x12_3 <- df.grace$f11 - df.grace$f12 + df.grace$f13
+
+
+a2 <- -9.02
+b2 <- -6.97
+c2 <- -5.32
+
+df.grace$f21 <- ifelse(df.grace$sbp_20>=a2,((df.grace$sbp_20-a2)^3),0)
+df.grace$f22 <- ifelse(df.grace$sbp_20>=b2,((df.grace$sbp_20-b2)^3)*(c2-a2)/(c2-b2),0)
+df.grace$f23 <- ifelse(df.grace$sbp_20>=c2,((df.grace$sbp_20-c2)^3)*(b2-a2)/(c2-b2),0)
+df.grace$x22_3 <- df.grace$f21 - df.grace$f22 + df.grace$f23
+
+
+a3 <- 1.71
+b3 <- 2.31
+c3 <- 2.77
+d3 <- 3.95
+
+df.grace$f31 <- ifelse(df.grace$pulse_30>=a3,((df.grace$pulse_30-a3)^3),0)
+df.grace$f32 <- ifelse(df.grace$pulse_30>=c3,((df.grace$pulse_30-c3)^3)*(d3-a3)/(d3-c3),0)
+df.grace$f33 <- ifelse(df.grace$pulse_30>=d3,((df.grace$pulse_30-d3)^3)*(c3-a3)/(d3-c3),0)
+df.grace$x32_4 <- df.grace$f31 - df.grace$f32 + df.grace$f33
+
+df.grace$f34 <- ifelse(df.grace$pulse_30>=b3,((df.grace$pulse_30-b3)^3),0)
+df.grace$f35 <- ifelse(df.grace$pulse_30>=c3,((df.grace$pulse_30-c3)^3)*(d3-b3)/(d3-c3),0)
+df.grace$f36 <- ifelse(df.grace$pulse_30>=d3,((df.grace$pulse_30-d3)^3)*(c3-b3)/(d3-c3),0)
+df.grace$x33_4 <- df.grace$f34 - df.grace$f35 + df.grace$f36
+
+
+a4 <- 0.685
+b4 <- 0.925
+c4 <- 1.145
+d4 <- 2.065
+
+df.grace$f41 <- ifelse(df.grace$creatinine>=a4,((df.grace$creatinine-a4)^3),0)
+df.grace$f42 <- ifelse(df.grace$creatinine>=c4,((df.grace$creatinine-c4)^3)*(d4-a4)/(d4-c4),0)
+df.grace$f43 <- ifelse(df.grace$creatinine>=d4,((df.grace$creatinine-d4)^3)*(c4-a4)/(d4-c4),0) 
+df.grace$x42_4 <- df.grace$f41 - df.grace$f42 + df.grace$f43
+
+df.grace$f44 <- ifelse(df.grace$creatinine>=b4,((df.grace$creatinine-b4)^3),0)
+df.grace$f45 <- ifelse(df.grace$creatinine>=c4,((df.grace$creatinine-c4)^3)*(d4-b4)/(d4-c4),0)
+df.grace$f46 <- ifelse(df.grace$creatinine>=d4,((df.grace$creatinine-d4)^3)*(c4-b4)/(d4-c4),0) 
+df.grace$x43_4 <- df.grace$f44 - df.grace$f45 + df.grace$f46
+
+df.grace$killip2 <- ifelse(df.grace$killip==2,1,0)
+df.grace$killip3 <- ifelse(df.grace$killip==3,1,0)
+df.grace$killip4 <- ifelse(df.grace$killip==4,1,0)
+
+# coefficients for death
+df.grace$beta.hat.d <- (df.grace$age_10*0.41157)+(df.grace$x12_3*0.01290)+(df.grace$sbp_20*0.08222)+(df.grace$x22_3*0.01020)+(df.grace$pulse_30*0.13138)+(df.grace$x32_4*0.40176)+(df.grace$x33_4*-1.37249)+(df.grace$creatinine*-0.51259)+(df.grace$x42_4*7.52634)+(df.grace$x43_4*-18.23023)+(df.grace$killip2*0.63827)+(df.grace$killip3*0.85325)+(df.grace$killip4*1.29372)+(df.grace$cpr*0.87185)+(df.grace$trop.grace*0.37660)+(df.grace$ecg.ischaemia*0.44303)
+
+s0365 <- 0.9983577131
+
+df.grace$grace.1y.d <- 1-s0365^exp(df.grace$beta.hat.d)
+
+
+# coefficients for death or MI
+df.grace$beta.hat <- (df.grace$age_10*0.14677)+(df.grace$x12_3*0.02090)+(df.grace$sbp_20*0.01797)+(df.grace$x22_3*0.01020)+(df.grace$pulse_30*0.04230)+(df.grace$x32_4*0.37817)+(df.grace$x33_4*-1.25482)+(df.grace$creatinine*-0.15965)+(df.grace$x42_4*5.02142)+(df.grace$x43_4*-12.33887)+(df.grace$killip2*0.53625)+(df.grace$killip3*0.68594)+(df.grace$killip4*1.15850)+(df.grace$cpr*0.67071)+(df.grace$trop.grace*0.22710)+(df.grace$ecg.ischaemia*0.32831)
+
+s365 <- 0.9865696068
+
+df.grace$grace.1y.d.mi <- 1-s365^exp(df.grace$beta.hat)
+
+
+
+# split dataframes into type 1 and 2
+df.t1 <- subset(df.grace, group=="T1")
+df.t2 <- subset(df.grace, group=="T2")
+
+
+
+# GRACE 2.0 and death in type 1 versus type 2 MI
+t1roc.d <- plot.roc(df.t1$death.1y,df.t1$grace.1y.d,percent=TRUE,ci=F,col="blue",of="thresholds")
+t2roc.d <- plot.roc(df.t2$death.1y,df.t2$grace.1y.d,percent=TRUE,ci=F,col="blue",of="thresholds")
+
+#de long test
+roc.test(t1roc.d,t2roc.d)
+
+#ci
+ci.auc(t1roc.d, conf.level=0.95, method="delong")
+ci.auc(t2roc.d, conf.level=0.95, method="delong")
+
+#calibration plot
+cOutcome <- "death.1y"
+t1.d.hsl <- plotCalibration(df.t1, cOutcome, df.t1$grace.1y.d, groups=10)
+t2.d.hsl <- plotCalibration(df.t2, cOutcome, df.t2$grace.1y.d, groups=10)
+
+# data fram above can be extracted into ggplot2
+
+
+
+
+# GRACE 2.0 and death or mi
+t1roc.md <- plot.roc(df.t1$death.mi,df.t1$grace.1y.d.mi,percent=TRUE,ci=FALSE,col="blue",of="thresholds")
+t2roc.md <- plot.roc(df.t2$death.mi,df.t2$grace.1y.d.mi,percent=TRUE,ci=FALSE,col="blue",of="thresholds")
+
+# de long test
+roc.test(t1roc.md,t2roc.md)
+
+#ci
+ci.auc(t1roc.md, conf.level=0.95, method="delong")
+ci.auc(t2roc.md, conf.level=0.95, method="delong")
+
+#calibration plot
+cOutcome <- "death.mi"
+t1.dmi.hsl <- plotCalibration(df.t1, cOutcome, df.t1$grace.1y.d.mi, groups=10)
+t2.dmi.hsl <- plotCalibration(df.t2, cOutcome, df.t2$grace.1y.d.mi, groups=10)
+
+
+# KM curves with categories of GRACE 2.0 risk and death 
+df.grace$grace.cat <- ifelse(df.grace$grace.1y.d.mi<0.03&df.grace$group=="T1",1,
+                             ifelse(df.grace$grace.1y.d.mi<0.03&df.grace$group=="T2",2,
+                                    ifelse(df.grace$grace.1y.d.mi>=0.03&df.grace$grace.1y.d.mi<=0.08&df.grace$group=="T1",3,
+                                           ifelse(df.grace$grace.1y.d.mi>=0.03&df.grace$grace.1y.d.mi<=0.08&df.grace$group=="T2",4,
+                                                  ifelse(df.grace$grace.1y.d.mi>0.08&df.grace$group=="T1",5,6)))))
+
+t.Surv1 <- Surv(df.grace$days.to.death, df.grace$death.1y)
+t.survfit1 <- survfit(t.Surv1~grace.cat, df.grace)
+t.survframe1 <-createSurvivalFrame(t.survfit1)
+
+Fig1 <- qplot_survival(t.survframe1,f.CI=F)+
+        theme_classic()+
+        coord_cartesian(ylim = c(0,1.01), xlim = c(0,365))+
+        scale_x_continuous(breaks=seq(0,365,30))+
+        scale_y_continuous(labels=percent)+
+        labs(x="Time (Days)", y="Survival (All Cause Death)")
+Fig1
+
+
+
